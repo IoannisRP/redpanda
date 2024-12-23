@@ -41,6 +41,17 @@ rp_test(
 )
 
 rp_test(
+  UNIT_TEST
+  GTEST
+  BINARY_NAME pandaproxy_protobuf_rendering
+  SOURCES
+    protobuf_rendering.cc
+  LIBRARIES v::gtest_main v_pandaproxy_schema_registry
+  ARGS "-- -c 1"
+  LABELS pandaproxy
+)
+
+rp_test(
   FIXTURE_TEST
   BINARY_NAME pandaproxy_schema_registry
   SOURCES
