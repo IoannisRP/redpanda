@@ -319,3 +319,17 @@ redpanda_cc_btest(
         "@seastar//:testing",
     ],
 )
+
+redpanda_cc_btest(
+    name = "protobuf_rendering_fuzz",
+    timeout = "short",
+    srcs = [
+        "protobuf_rendering_fuzz.cc",
+    ],
+    deps = [
+        "//src/v/bytes:iobuf_parser",
+        "//src/v/bytes:streambuf",
+        "//src/v/pandaproxy",
+        "@fmt",
+    ],
+)
