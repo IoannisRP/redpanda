@@ -203,11 +203,15 @@ using unparsed_schema_definition
 using canonical_schema_definition
   = typed_schema_definition<struct canonical_schema_definition_tag>;
 
+///\brief An invalid definition of the schema and its type.
+///
+/// This form is the result of an unparsed_schema_defnition that failed
+/// to be turned into a canonical_schema_definition.
+using invalid_schema_definition
+  = typed_schema_definition<struct invalid_schema_definition_tag>;
+
 ///\brief Util function for when a canonical schema need to be re-ingested
 unparsed_schema_definition to_unparsed(canonical_schema_definition&&);
-
-static const unparsed_schema_definition invalid_schema_definition{
-  "", schema_type::avro};
 
 ///\brief The definition of an avro schema.
 class avro_schema_definition {
