@@ -1019,7 +1019,12 @@ class ShadowLinkBasicTests(ShadowLinkTestBase):
             max_compaction_lag_ms=topic_properties["max.compaction.lag.ms"],
         )
         self.source_default_client().create_topic(topic)
-        source_topic = self.source_cluster_rpk.describe_topic_configs(topic.name)
+        source_topic = wait_until_result(
+            lambda: self.source_cluster_rpk.describe_topic_configs(topic.name),
+            timeout_sec=20,
+            err_msg=f"Failed to describe topic {topic.name}",
+            retry_on_exc=True,
+        )
 
         def validate_topic_properties(properties_to_check: dict[str, tuple[str, str]]):
             for key, val in topic_properties.items():
