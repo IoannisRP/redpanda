@@ -406,7 +406,7 @@ ss::future<response_ptr> create_topics_handler::handle(
           auto& response_ref = response;
           return ctx.quota_mgr()
             .record_partition_mutations(
-              ctx.header().client_id, t.num_partitions, now)
+              "test", ctx.header().client_id, t.num_partitions, now)
             .then([&response_ref](std::chrono::milliseconds delay) {
                 response_ref.data.throttle_time_ms = std::max(
                   response_ref.data.throttle_time_ms, delay);

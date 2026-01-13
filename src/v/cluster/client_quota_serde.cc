@@ -31,6 +31,18 @@ operator<<(std::ostream& os, const entity_key::part::client_id_match& c) {
     return os;
 }
 
+std::ostream&
+operator<<(std::ostream& os, const entity_key::part::user_default_match&) {
+    fmt::print(os, "user_default_match{{}}");
+    return os;
+}
+
+std::ostream&
+operator<<(std::ostream& os, const entity_key::part::user_match& u) {
+    fmt::print(os, "user_match{{value:{}}}", u.value);
+    return os;
+}
+
 std::ostream& operator<<(
   std::ostream& os, const entity_key::part::client_id_prefix_match& c) {
     fmt::print(os, "client_id_prefix_match{{value:{}}}", c.value);

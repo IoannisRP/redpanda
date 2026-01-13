@@ -19,6 +19,7 @@
 #include <boost/test/test_tools.hpp>
 #include <boost/test/unit_test.hpp>
 
+#include <cmath>
 #include <variant>
 
 using namespace kafka;
@@ -31,6 +32,7 @@ static const auto default_key = entity_key(
 
 const ss::sstring test_client_id = "franz-go";
 const tracker_key test_client_id_key = k_client_id{test_client_id};
+const tracker_key test_empty_key = std::monostate{};
 
 constexpr auto P_DEF = 1111;
 constexpr auto F_DEF = 2222;
@@ -38,8 +40,15 @@ constexpr auto PM_DEF = 3333;
 
 // Helper for checking std::variant types for equality
 const auto CHECK_VARIANT_EQ = [](auto expected, auto got) {
+    BOOST_CHECK(std::holds_alternative<decltype(expected)>(got));
     BOOST_CHECK_EQUAL(expected, get<decltype(expected)>(got));
 };
+
+namespace std {
+std::ostream& operator<<(std::ostream& os, std::monostate) {
+    return os << "monostate";
+}
+}; // namespace std
 
 struct fixture {
     ss::sharded<cluster::client_quota::store> quota_store;
@@ -62,9 +71,9 @@ SEASTAR_THREAD_TEST_CASE(quota_translator_default_test) {
       .partition_mutation_limit = std::nullopt,
     };
     auto key = f.tr.find_quota_key(
-      {client_quota_type::produce_quota, test_client_id});
+      {client_quota_type::produce_quota, std::nullopt, test_client_id});
     auto limits = f.tr.find_quota_value(key);
-    BOOST_CHECK_EQUAL(test_client_id_key, key);
+    BOOST_CHECK_EQUAL(test_empty_key, key);
     BOOST_CHECK_EQUAL(default_limits, limits);
     BOOST_CHECK(f.tr.is_empty());
 }
@@ -85,7 +94,7 @@ SEASTAR_THREAD_TEST_CASE(quota_translator_modified_default_test) {
       .partition_mutation_limit = 3333,
     };
     auto key = f.tr.find_quota_key(
-      {client_quota_type::produce_quota, test_client_id});
+      {client_quota_type::produce_quota, std::nullopt, test_client_id});
     auto limits = f.tr.find_quota_value(key);
     BOOST_CHECK_EQUAL(test_client_id_key, key);
     BOOST_CHECK_EQUAL(expected_limits, limits);
@@ -95,16 +104,20 @@ SEASTAR_THREAD_TEST_CASE(quota_translator_modified_default_test) {
 void run_quota_translator_client_group_test(fixture& f) {
     // Stage 1 - Start by checking that tracker_key's are correctly detected
     // for various client ids
-    auto get_produce_key = [&f](auto client_id) {
-        return f.tr.find_quota_key(
-          {client_quota_type::produce_quota, client_id});
+    auto get_produce_key = [&f](std::optional<std::string_view> client_id) {
+        auto t = f.tr.find_quota_key(
+          {client_quota_type::produce_quota, std::nullopt, client_id});
+        return t;
     };
     auto get_fetch_key = [&f](auto client_id) {
-        return f.tr.find_quota_key({client_quota_type::fetch_quota, client_id});
+        return f.tr.find_quota_key(
+          {client_quota_type::fetch_quota, std::nullopt, client_id});
     };
     auto get_mutation_key = [&f](auto client_id) {
         return f.tr.find_quota_key(
-          {client_quota_type::partition_mutation_quota, client_id});
+          {client_quota_type::partition_mutation_quota,
+           std::nullopt,
+           client_id});
     };
 
     // Check keys for produce
@@ -112,21 +125,21 @@ void run_quota_translator_client_group_test(fixture& f) {
     CHECK_VARIANT_EQ(
       k_group_name{"not-franz-go"}, get_produce_key("not-franz-go"));
     CHECK_VARIANT_EQ(k_client_id{"unknown"}, get_produce_key("unknown"));
-    CHECK_VARIANT_EQ(k_client_id{""}, get_produce_key(std::nullopt));
+    CHECK_VARIANT_EQ(k_client_id{}, get_produce_key(std::nullopt));
 
-    // Check keys for fetch
+    //// Check keys for fetch
     CHECK_VARIANT_EQ(k_group_name{"franz-go"}, get_fetch_key("franz-go"));
     CHECK_VARIANT_EQ(
       k_group_name{"not-franz-go"}, get_fetch_key("not-franz-go"));
     CHECK_VARIANT_EQ(k_client_id{"unknown"}, get_fetch_key("unknown"));
-    CHECK_VARIANT_EQ(k_client_id{""}, get_fetch_key(std::nullopt));
+    CHECK_VARIANT_EQ(k_client_id{}, get_fetch_key(std::nullopt));
 
-    // Check keys for partition mutations
+    //// Check keys for partition mutations
     CHECK_VARIANT_EQ(k_client_id{"franz-go"}, get_mutation_key("franz-go"));
     CHECK_VARIANT_EQ(
       k_client_id{"not-franz-go"}, get_mutation_key("not-franz-go"));
     CHECK_VARIANT_EQ(k_client_id{"unknown"}, get_mutation_key("unknown"));
-    CHECK_VARIANT_EQ(k_client_id{""}, get_mutation_key(std::nullopt));
+    CHECK_VARIANT_EQ(k_client_id{}, get_mutation_key(std::nullopt));
 
     // Stage 2 - Next verify that the correct quota limits apply to the
     // various tracker_key's being tested

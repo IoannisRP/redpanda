@@ -51,13 +51,13 @@ ss::future<> send_requests(quota_manager& qm, size_t count, bool use_unique) {
         // contention on produce/fetch token buckets for the same client id
         if (ss::this_shard_id() % 2 == 0) {
             co_await qm.record_fetch_tp(
-              client_id, 1, quota_manager::clock::now());
+              "test", client_id, 1, quota_manager::clock::now());
             auto delay = co_await qm.throttle_fetch_tp(
-              client_id, quota_manager::clock::now());
+              "test", client_id, quota_manager::clock::now());
             perf_tests::do_not_optimize(delay);
         } else {
             auto delay = co_await qm.record_produce_tp_and_throttle(
-              client_id, 1, quota_manager::clock::now());
+              "test", client_id, 1, quota_manager::clock::now());
             perf_tests::do_not_optimize(delay);
         }
         co_await maybe_yield();
@@ -188,7 +188,7 @@ future<size_t> run_latency_test(latency_test_case tc) {
           // Have a non-trivial number of existing clients in the map
           for (int i = 0; i < tc.n_other_clients; i++) {
               co_await qm.record_produce_tp_and_throttle(
-                fmt::format("client-{}", i), 1, now);
+                "test", fmt::format("client-{}", i), 1, now);
           }
 
           // Pre-generate the client-id's used during the benchmark
@@ -204,7 +204,7 @@ future<size_t> run_latency_test(latency_test_case tc) {
               }
               // Ensure that the client id used is already "known"
               co_await qm.record_produce_tp_and_throttle(
-                fixed_client_id, 1, now);
+                "test", fixed_client_id, 1, now);
           }
 
           perf_tests::start_measuring_time();
@@ -214,13 +214,14 @@ future<size_t> run_latency_test(latency_test_case tc) {
               if (tc.is_produce_not_fetch) {
                   // Produce
                   auto res = co_await qm.record_produce_tp_and_throttle(
-                    client_ids[i], 1, now);
+                    "test", client_ids[i], 1, now);
                   perf_tests::do_not_optimize(res);
               } else {
                   // Fetch
-                  auto res = co_await qm.throttle_fetch_tp(client_ids[i], now);
+                  auto res = co_await qm.throttle_fetch_tp(
+                    "test", client_ids[i], now);
                   perf_tests::do_not_optimize(res);
-                  co_await qm.record_fetch_tp(client_ids[i], 1, now);
+                  co_await qm.record_fetch_tp("test", client_ids[i], 1, now);
               }
           }
 

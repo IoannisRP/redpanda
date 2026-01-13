@@ -54,7 +54,7 @@ public:
         }
 
         /// client_id_default_match is the quota entity type corresponding to
-        /// /config/clients/<default>
+        /// /clients/<default> part of the key
         struct client_id_default_match
           : serde::envelope<
               client_id_default_match,
@@ -76,8 +76,31 @@ public:
             }
         };
 
+        /// user_default_match is the quota entity type corresponding to
+        /// /users/<default> part of the key
+        struct user_default_match
+          : serde::envelope<
+              user_default_match,
+              serde::version<0>,
+              serde::compat_version<0>> {
+            friend bool
+            operator==(const user_default_match&, const user_default_match&)
+              = default;
+
+            auto serde_fields() { return std::tie(); }
+
+            friend std::ostream&
+            operator<<(std::ostream&, const user_default_match&);
+
+            template<typename H>
+            friend H AbslHashValue(H h, const user_default_match&) {
+                return H::combine(
+                  std::move(h), typeid(user_default_match).hash_code());
+            }
+        };
+
         /// client_id_match is the quota entity type corresponding to
-        /// /config/clients/<client-id>
+        /// /clients/<client-id> part of the key
         struct client_id_match
           : serde::envelope<
               client_id_match,
@@ -94,6 +117,29 @@ public:
             friend H AbslHashValue(H h, const client_id_match& c) {
                 return H::combine(
                   std::move(h), typeid(client_id_match).hash_code(), c.value);
+            }
+
+            ss::sstring value;
+
+            auto serde_fields() { return std::tie(value); }
+        };
+
+        /// user_match is the quota entity type corresponding to
+        /// /users/<user> part of the key
+        struct user_match
+          : serde::envelope<
+              user_match,
+              serde::version<0>,
+              serde::compat_version<0>> {
+            friend bool operator==(const user_match&, const user_match&)
+              = default;
+
+            friend std::ostream& operator<<(std::ostream&, const user_match&);
+
+            template<typename H>
+            friend H AbslHashValue(H h, const user_match& u) {
+                return H::combine(
+                  std::move(h), typeid(user_match).hash_code(), u.value);
             }
 
             ss::sstring value;
@@ -133,13 +179,17 @@ public:
         serde::variant<
           client_id_default_match,
           client_id_match,
-          client_id_prefix_match>
+          client_id_prefix_match,
+          user_default_match,
+          user_match>
           part;
     };
 
     using client_id_default_match = constructor<part::client_id_default_match>;
     using client_id_match = constructor<part::client_id_match>;
     using client_id_prefix_match = constructor<part::client_id_prefix_match>;
+    using user_default_match = constructor<part::user_default_match>;
+    using user_match = constructor<part::user_match>;
 
     template<typename... T>
     explicit entity_key(T&&... t)

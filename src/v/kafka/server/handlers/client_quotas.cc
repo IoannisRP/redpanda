@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <variant>
 
@@ -49,8 +50,14 @@ get_entity_data(const entity_key::part& p) {
       [](const entity_key::part::client_id_default_match&) -> entity_data {
           return {.entity_type = "client-id", .entity_name = std::nullopt};
       },
+      [](const entity_key::part::user_default_match&) -> entity_data {
+          return {.entity_type = "user", .entity_name = std::nullopt};
+      },
       [](const entity_key::part::client_id_match& m) -> entity_data {
           return {.entity_type = "client-id", .entity_name = m.value};
+      },
+      [](const entity_key::part::user_match& m) -> entity_data {
+          return {.entity_type = "user", .entity_name = m.value};
       },
       [](const entity_key::part::client_id_prefix_match& m) -> entity_data {
           return {.entity_type = "client-id-prefix", .entity_name = m.value};
@@ -105,14 +112,16 @@ exact_match_key(const component_data& component) {
     return string_switch<result<entity_key::part, kerror>>(
              component.entity_type)
       .match(
+        "user",
+        entity_key::part{.part = entity_key::user_match{*component.match}})
+      .match(
         "client-id",
         entity_key::part{.part = entity_key::client_id_match{*component.match}})
       .match(
         "client-id-prefix",
         entity_key::part{
           .part = entity_key::client_id_prefix_match{*component.match}})
-      .match_all(
-        "user",
+      .match(
         "ip",
         {
           error_code::unsupported_version,
@@ -130,6 +139,7 @@ result<entity_key::part, kerror>
 default_match_key(const component_data& component) {
     return string_switch<result<entity_key::part, kerror>>(
              component.entity_type)
+      .match("user", entity_key::part{.part = entity_key::user_default_match{}})
       .match(
         "client-id",
         entity_key::part{.part = entity_key::client_id_default_match{}})
@@ -138,8 +148,7 @@ default_match_key(const component_data& component) {
         {kafka::error_code::invalid_request,
          "Invalid quota entity type, client-id-prefix entity should not "
          "be used at the default level (use client-id default instead)."})
-      .match_all(
-        "user",
+      .match(
         "ip",
         {
           error_code::unsupported_version,
@@ -167,6 +176,11 @@ any_match_filter(const component_data& component) {
     return string_switch<result<key_part_predicate, kerror>>(
              component.entity_type)
       .match(
+        "user",
+        make_any_filter<
+          entity_key::part::user_default_match,
+          entity_key::part::user_match>())
+      .match(
         "client-id",
         make_any_filter<
           entity_key::part::client_id_default_match,
@@ -174,8 +188,7 @@ any_match_filter(const component_data& component) {
       .match(
         "client-id-prefix",
         make_any_filter<entity_key::part::client_id_prefix_match>())
-      .match_all(
-        "user",
+      .match(
         "ip",
         {
           error_code::unsupported_version,
@@ -246,7 +259,15 @@ result<entity_key::part, kerror> make_part(const auto& entity) {
         part.part.emplace<entity_key::part::client_id_prefix_match>(
           entity_key::part::client_id_prefix_match{
             .value = entity.entity_name.value_or("")});
-    } else if (entity.entity_type == "user" || entity.entity_type == "ip") {
+    } else if (entity.entity_type == "user") {
+        if (is_null_or_empty(entity.entity_name)) {
+            part.part.emplace<entity_key::part::user_default_match>();
+        } else {
+            part.part.emplace<entity_key::part::user_match>(
+              entity_key::part::user_match{
+                .value = entity.entity_name.value_or("")});
+        }
+    } else if (entity.entity_type == "ip") {
         return {
           error_code::unsupported_version,
           fmt::format("Entity type '{}' not yet supported", entity.entity_type),
@@ -265,7 +286,7 @@ result<entity_key, kerror> make_key(const alter_entities& entity) {
     // TODO: once we support compound user+client keys, we should check that
     // either there's only a single key part or the key is a user+client
     // compound key
-    if (entity.size() != 1) {
+    if (entity.size() > 2) {
         return kerror{
           error_code::invalid_request,
           "Invalid client quota entity",
@@ -323,7 +344,7 @@ ss::future<response_ptr> describe_client_quotas_handler::handle(
     }
 
     std::optional<key_part_predicate> client_predicate;
-    // std::optional<key_part_predicate> user_predicate;
+    std::optional<key_part_predicate> user_predicate;
     // std::optional<key_part_predicate> ip_predicate;
 
     for (const auto& component : request.data.components) {
@@ -333,9 +354,9 @@ ss::future<response_ptr> describe_client_quotas_handler::handle(
         // is a problem with implementing support for KIP-554, as
         // `kafka-configs` is a common kafka tool used to manage users.
         // TODO: Fully implement quotas
-        if (component.entity_type == "user") {
-            continue;
-        }
+        // if (component.entity_type == "user") {
+        //    continue;
+        //}
 
         auto filter_or_err = make_filter(component);
 
@@ -346,18 +367,20 @@ ss::future<response_ptr> describe_client_quotas_handler::handle(
         }
 
         auto& predicate = [&]() mutable -> auto& {
-            return client_predicate;
-            // TODO: later add support for user/ip quotas
-            // if (component.entity_type == "client-id" ||
-            // component.entity_type == "client-id-prefix") {
-            //     return client_predicate;
-            // } else if (component.entity_type == "user") {
-            //     return user_predicate;
-            // } else if (component.entity_type == "ip") {
-            //     return ip_predicate;
-            // } else {
-            //     // ERROR: unknown
-            // }
+            // return client_predicate;
+            //  TODO: later add support for user/ip quotas
+            if (
+              component.entity_type == "client-id"
+              || component.entity_type == "client-id-prefix") {
+                return client_predicate;
+            } else if (component.entity_type == "user") {
+                return user_predicate;
+                // } else if (component.entity_type == "ip") {
+                //     return ip_predicate;
+            } else {
+                throw std::runtime_error{"Bad entity type"};
+                // ERROR: unknown
+            }
         }();
 
         if (predicate.has_value()) {
@@ -371,34 +394,36 @@ ss::future<response_ptr> describe_client_quotas_handler::handle(
         predicate = std::move(filter_or_err).assume_value();
     }
 
-    auto quotas = ctx.quota_store().range(
-      [&client_predicate, strict = request.data.strict](
-        const std::pair<entity_key, entity_value>& kv) {
-          // Each predicate in the request needs to have at least one key part
-          // that matches it (regardless of strict mode)
-          const auto& key = kv.first;
-          auto each_predicate_has_a_match = !client_predicate
-                                            || std::ranges::any_of(
-                                              key.parts, *client_predicate);
-          // && (!user_predicate || std::ranges::any_of(key.parts,
-          // *user_predicate))
-          // && (!ip_predicate || std::ranges::any_of(key.parts,
-          // *ip_predicate));
+    auto quotas = ctx.quota_store().range([&client_predicate,
+                                           &user_predicate,
+                                           strict = request.data.strict](
+                                            const std::pair<
+                                              entity_key,
+                                              entity_value>& kv) {
+        // Each predicate in the request needs to have at least one key part
+        // that matches it (regardless of strict mode)
+        const auto& key = kv.first;
+        auto each_predicate_has_a_match
+          = (!client_predicate
+             || std::ranges::any_of(key.parts, *client_predicate))
+            && (!user_predicate || std::ranges::any_of(key.parts, *user_predicate));
+        // && (!ip_predicate || std::ranges::any_of(key.parts,
+        // *ip_predicate));
 
-          if (!each_predicate_has_a_match) {
-              return false;
-          }
+        if (!each_predicate_has_a_match) {
+            return false;
+        }
 
-          // In strict mode, also require that each key part has a matching
-          // predicate
-          auto reverse_predicate =
-            [&client_predicate](const entity_key::part& part) {
-                return client_predicate && (*client_predicate)(part);
-                //  || (user_predicate && (*user_predicate)(part))
-                //  || (ip_predicate && (*ip_predicate)(part));
-            };
-          return !strict || std::ranges::all_of(key.parts, reverse_predicate);
-      });
+        // In strict mode, also require that each key part has a matching
+        // predicate
+        auto reverse_predicate =
+          [&client_predicate, &user_predicate](const entity_key::part& part) {
+              return (client_predicate && (*client_predicate)(part))
+                     || (user_predicate && (*user_predicate)(part));
+              //  || (ip_predicate && (*ip_predicate)(part));
+          };
+        return !strict || std::ranges::all_of(key.parts, reverse_predicate);
+    });
 
     res.data.entries->reserve(quotas.size());
     for (const auto& q : quotas) {

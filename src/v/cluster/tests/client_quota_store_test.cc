@@ -24,6 +24,11 @@ const entity_key key0{entity_key::client_id_default_match{}};
 const entity_key key1{entity_key::client_id_match{"producer-app-1"}};
 const entity_key key2{entity_key::client_id_match{"consumer-app-1"}};
 const entity_key key3{entity_key::client_id_prefix_match{"franz-go-prefix"}};
+const entity_key default_user_key{entity_key::user_default_match{}};
+const entity_key users_key1{entity_key::user_match{"user-1"}};
+const entity_key users_key2{entity_key::user_match{"user-2"}};
+const entity_key users_client_key1{
+  entity_key::user_match{"user-1"}, entity_key::client_id_match{"client-1"}};
 
 const entity_value val0{
   .consumer_byte_rate = 10240,
@@ -38,6 +43,25 @@ const entity_value val2{
 const entity_value val3{
   .producer_byte_rate = 12345,
 };
+
+BOOST_AUTO_TEST_CASE(quota_store_users) {
+    store st;
+
+    BOOST_CHECK(!st.get_quota(default_user_key).has_value());
+    BOOST_CHECK(!st.get_quota(users_key1).has_value());
+    BOOST_CHECK(!st.get_quota(users_key2).has_value());
+    BOOST_CHECK(!st.get_quota(users_client_key1).has_value());
+
+    st.set_quota(default_user_key, val0);
+    st.set_quota(users_key1, val1);
+    st.set_quota(users_key2, val2);
+    st.set_quota(users_client_key1, val3);
+
+    BOOST_CHECK_EQUAL(st.get_quota(default_user_key), val0);
+    BOOST_CHECK_EQUAL(st.get_quota(users_key1), val1);
+    BOOST_CHECK_EQUAL(st.get_quota(users_key2), val2);
+    BOOST_CHECK_EQUAL(st.get_quota(users_client_key1), val3);
+}
 
 BOOST_AUTO_TEST_CASE(quota_store_set_get_remove) {
     store st;

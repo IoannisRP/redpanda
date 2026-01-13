@@ -20,8 +20,17 @@ from rptest.clients.kcl import RawKCL
 from rptest.clients.rpk import RpkException, RpkTool
 from rptest.services.admin import Admin
 from rptest.services.cluster import cluster
+from rptest.services.redpanda import LoggingConfig
 from rptest.tests.redpanda_test import RedpandaTest
 from rptest.util import expect_exception
+
+log_config = LoggingConfig(
+    "info",
+    logger_levels={
+        "kafka": "trace",
+        "kafka_quotas": "trace",
+    },
+)
 
 
 def expect_kafka_cli_error_msg(error_msg: str):
@@ -33,8 +42,16 @@ def expect_rpk_error_msg(error_msg: str):
 
 
 class QuotaEntityType(Enum):
+    USER = "user"
     CLIENT_ID = "client-id"
     CLIENT_ID_PREFIX = "client-id-prefix"
+
+    def _get_ordering(self):
+        return {name: idx for idx, name in enumerate(self.__class__)}
+
+    def __lt__(self, other):
+        ordering = self._get_ordering()
+        return ordering[self] < ordering[other]
 
 
 class QuotaEntityPart(NamedTuple):
@@ -45,9 +62,27 @@ class QuotaEntityPart(NamedTuple):
     def from_dict(cls, d: dict):
         return cls(name=d["name"], type=QuotaEntityType(d["type"]))
 
+    def __lt__(self, other):
+        if self.type != other.type:
+            return self.type.__lt__(other.type)
+        return self.name.__lt__(other.name)
+
+    def __gt__(self, other):
+        if self.type != other.type:
+            return self.type.__gt__(other.type)
+        return self.name.__gt__(other.name)
+
 
 class QuotaEntity(NamedTuple):
     parts: list[QuotaEntityPart]
+
+    @staticmethod
+    def user_default():
+        return QuotaEntity([QuotaEntityPart("<default>", QuotaEntityType.USER)])
+
+    @staticmethod
+    def user(name):
+        return QuotaEntity([QuotaEntityPart(name, QuotaEntityType.USER)])
 
     @staticmethod
     def client_id_default():
@@ -60,6 +95,15 @@ class QuotaEntity(NamedTuple):
     @staticmethod
     def client_id_prefix(name):
         return QuotaEntity([QuotaEntityPart(name, QuotaEntityType.CLIENT_ID_PREFIX)])
+
+    @staticmethod
+    def client_id_default_and_user_default():
+        return QuotaEntity(
+            [
+                QuotaEntityPart("<default>", QuotaEntityType.USER),
+                QuotaEntityPart("<default>", QuotaEntityType.CLIENT_ID),
+            ]
+        )
 
     @classmethod
     def from_list(cls, l: list):
@@ -131,7 +175,7 @@ class QuotaOutput(NamedTuple):
 
 class QuotaManagementTest(RedpandaTest):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, log_config=log_config, **kwargs)
 
         self.rpk = RpkTool(self.redpanda)
         self.kafka_cli = KafkaCliTools(self.redpanda)
@@ -195,6 +239,59 @@ Quota configs for client-id 'custom-producer' are producer_byte_rate=20480.0"""
 
         out = self.kafka_cli.describe_quota_config("--entity-type clients")
         expected = ""
+        assert_outputs_equal(out, expected)
+
+        self.redpanda.logger.debug("Create a config for user default")
+        self.kafka_cli.alter_quota_config(
+            "--entity-type users --entity-default",
+            to_add={"consumer_byte_rate": 10241.0},
+        )
+
+        self.redpanda.logger.debug("Create a config for a specific user")
+        self.kafka_cli.alter_quota_config(
+            "--entity-type users --entity-name custom-user",
+            to_add={"producer_byte_rate": 20481.0},
+        )
+
+        self.redpanda.logger.debug(
+            "Check describe filtering works for a default user match"
+        )
+        out = self.kafka_cli.describe_quota_config("--user-defaults")
+        # print(f"-- Got: '{out}'")
+        expected = "Quota configs for the default user-principal are consumer_byte_rate=10241.0"
+        assert_outputs_equal(out, expected)
+
+        self.redpanda.logger.debug("Check specific match filtering works")
+        out = self.kafka_cli.describe_quota_config(
+            "--entity-type users --entity-name custom-user"
+        )
+        expected = "Quota configs for user-principal 'custom-user' are producer_byte_rate=20481.0"
+        assert_outputs_equal(out, expected)
+
+        self.redpanda.logger.debug("Create a config for specific client, specific user")
+        self.kafka_cli.alter_quota_config(
+            "--user custom-user-2 --client test-client",
+            to_add={"producer_byte_rate": 20482.0},
+        )
+
+        self.redpanda.logger.debug("Check specific match filtering works")
+        out = self.kafka_cli.describe_quota_config(
+            "--user custom-user-2 --client test-client"
+        )
+        expected = "Quota configs for user-principal 'custom-user-2', client-id 'test-client' are producer_byte_rate=20482.0"
+        assert_outputs_equal(out, expected)
+
+        self.redpanda.logger.debug("Create a config for default client, specific user")
+        self.kafka_cli.alter_quota_config(
+            "--entity-type users --entity-name custom-user-3 --entity-type clients --entity-default",
+            to_add={"producer_byte_rate": 20483.0},
+        )
+
+        self.redpanda.logger.debug("Check specific match filtering works")
+        out = self.kafka_cli.describe_quota_config(
+            "--entity-type users --entity-name custom-user-3 --entity-type clients --entity-default"
+        )
+        expected = "Quota configs for user-principal 'custom-user-3', the default client-id are producer_byte_rate=20483.0"
         assert_outputs_equal(out, expected)
 
     def describe(self, *args, **kwargs) -> QuotaOutput:
@@ -427,19 +524,19 @@ Quota configs for client-id 'custom-producer' are producer_byte_rate=20480.0"""
         with expect_rpk_error_msg("INVALID_REQUEST"):
             self.describe(any=["client-id", "client-id-prefix"], strict=strict)
 
-        # TODO: uncomment this once (user, client) compound keys are supported
-        # For now, this is just included to document the expected behaviour of
-        # compound keys and the strict field
-        # self.alter(default=["client-id", "user"],
-        #            add=["producer_byte_rate=2222"])
-        #
-        # got = self.describe(any=["client-id", "user"], strict=strict)
-        # compound_output = QuotaOutput([
-        #     Quota(entity=QuotaEntity.client_id_default_and_user_default(),
-        #           values=[QuotaValue.producer_byte_rate("2222")])
-        # ])
-        # self._assert_equal(got, compound_output)
-        #
+        self.alter(default=["client-id", "user"], add=["producer_byte_rate=2222"])
+
+        got = self.describe(any=["client-id", "user"], strict=strict)
+        compound_output = QuotaOutput(
+            [
+                Quota(
+                    entity=QuotaEntity.client_id_default_and_user_default(),
+                    values=[QuotaValue.producer_byte_rate("2222")],
+                )
+            ]
+        )
+        self._assert_equal(got, compound_output)
+
         # got = self.describe(any=["client-id"], strict=strict)
         # expected = QuotaOutput() if strict else compound_output
         # self._assert_equal(got, expected)
@@ -544,7 +641,7 @@ Quota configs for client-id 'custom-producer' are producer_byte_rate=20480.0"""
                 {
                     "Entity": [
                         {
-                            "Type": "user",  # Not yet supported
+                            "Type": "role",  # Not a valid entity type
                         }
                     ],
                     "Ops": [
@@ -559,7 +656,7 @@ Quota configs for client-id 'custom-producer' are producer_byte_rate=20480.0"""
         res = self.kcl.raw_alter_quotas(alter_body)
         assert len(res["Entries"]) == 2, f"Unexpected entries: {res}"
         assert res["Entries"][0]["ErrorCode"] == 0, f"Unexpected response: {res}"
-        assert res["Entries"][1]["ErrorCode"] == 35, f"Unexpected response: {res}"
+        assert res["Entries"][1]["ErrorCode"] == 42, f"Unexpected response: {res}"
         got = self.describe(default=["client-id"])
         expected = QuotaOutput(
             [

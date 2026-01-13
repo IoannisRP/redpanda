@@ -89,8 +89,8 @@ SEASTAR_THREAD_TEST_CASE(quota_manager_fetch_no_throttling) {
     const auto now = quota_manager::clock::now();
 
     // Test that if fetch throttling is disabled, we don't throttle
-    qm.record_fetch_tp(cid, 10000000000000, now).get();
-    auto delay = qm.throttle_fetch_tp(cid, now).get();
+    qm.record_fetch_tp("test", cid, 10000000000000, now).get();
+    auto delay = qm.throttle_fetch_tp("test", cid, now).get();
 
     BOOST_CHECK_EQUAL(0ms, delay);
 }
@@ -108,22 +108,22 @@ SEASTAR_THREAD_TEST_CASE(quota_manager_fetch_throttling) {
     auto now = quota_manager::clock::now();
 
     // Test that below the fetch quota we don't throttle
-    qm.record_fetch_tp(cid, 99, now).get();
-    auto delay = qm.throttle_fetch_tp(cid, now).get();
+    qm.record_fetch_tp("test", cid, 99, now).get();
+    auto delay = qm.throttle_fetch_tp("test", cid, now).get();
 
     BOOST_CHECK_EQUAL(delay, 0ms);
 
     // Test that above the fetch quota we throttle
-    qm.record_fetch_tp(cid, 10, now).get();
-    delay = qm.throttle_fetch_tp(cid, now).get();
+    qm.record_fetch_tp("test", cid, 10, now).get();
+    delay = qm.throttle_fetch_tp("test", cid, now).get();
 
     BOOST_CHECK_GT(delay, 0ms);
 
     // Test that once we wait out the throttling delay, we don't
     // throttle again (as long as we stay under the limit)
     now += 1s;
-    qm.record_fetch_tp(cid, 10, now).get();
-    delay = qm.throttle_fetch_tp(cid, now).get();
+    qm.record_fetch_tp("test", cid, 10, now).get();
+    delay = qm.throttle_fetch_tp("test", cid, now).get();
 
     BOOST_CHECK_EQUAL(delay, 0ms);
 }
@@ -152,9 +152,9 @@ SEASTAR_THREAD_TEST_CASE(quota_manager_fetch_stress_test) {
         ss::coroutine::lambda([](quota_manager& qm) -> ss::future<> {
             for (size_t i = 0; i < 1000; ++i) {
                 co_await qm.record_fetch_tp(
-                  cid, 1, quota_manager::clock::now());
+                  "test", cid, 1, quota_manager::clock::now());
                 auto delay [[maybe_unused]] = co_await qm.throttle_fetch_tp(
-                  cid, quota_manager::clock::now());
+                  "test", cid, quota_manager::clock::now());
                 co_await ss::maybe_yield();
             }
         }))
@@ -173,9 +173,13 @@ SEASTAR_THREAD_TEST_CASE(static_config_test) {
 
     {
         ss::sstring client_id = "franz-go";
-        f.sqm.local().record_fetch_tp(client_id, 1, now).get();
-        f.sqm.local().record_produce_tp_and_throttle(client_id, 1, now).get();
-        f.sqm.local().record_partition_mutations(client_id, 1, now).get();
+        f.sqm.local().record_fetch_tp("test", client_id, 1, now).get();
+        f.sqm.local()
+          .record_produce_tp_and_throttle("test", client_id, 1, now)
+          .get();
+        f.sqm.local()
+          .record_partition_mutations("test", client_id, 1, now)
+          .get();
         auto it = buckets_map->find(k_group_name{client_id});
         BOOST_REQUIRE(it != buckets_map->end());
         BOOST_REQUIRE(it->second->tp_produce_rate.has_value());
@@ -186,9 +190,13 @@ SEASTAR_THREAD_TEST_CASE(static_config_test) {
     }
     {
         ss::sstring client_id = "not-franz-go";
-        f.sqm.local().record_fetch_tp(client_id, 1, now).get();
-        f.sqm.local().record_produce_tp_and_throttle(client_id, 1, now).get();
-        f.sqm.local().record_partition_mutations(client_id, 1, now).get();
+        f.sqm.local().record_fetch_tp("test", client_id, 1, now).get();
+        f.sqm.local()
+          .record_produce_tp_and_throttle("test", client_id, 1, now)
+          .get();
+        f.sqm.local()
+          .record_partition_mutations("test", client_id, 1, now)
+          .get();
         auto it = buckets_map->find(k_group_name{client_id});
         BOOST_REQUIRE(it != buckets_map->end());
         BOOST_REQUIRE(it->second->tp_produce_rate.has_value());
@@ -199,9 +207,13 @@ SEASTAR_THREAD_TEST_CASE(static_config_test) {
     }
     {
         ss::sstring client_id = "unconfigured";
-        f.sqm.local().record_fetch_tp(client_id, 1, now).get();
-        f.sqm.local().record_produce_tp_and_throttle(client_id, 1, now).get();
-        f.sqm.local().record_partition_mutations(client_id, 1, now).get();
+        f.sqm.local().record_fetch_tp("test", client_id, 1, now).get();
+        f.sqm.local()
+          .record_produce_tp_and_throttle("test", client_id, 1, now)
+          .get();
+        f.sqm.local()
+          .record_partition_mutations("test", client_id, 1, now)
+          .get();
         auto it = buckets_map->find(k_client_id{client_id});
         BOOST_REQUIRE(it != buckets_map->end());
         BOOST_REQUIRE(it->second->tp_produce_rate.has_value());
@@ -225,9 +237,9 @@ SEASTAR_THREAD_TEST_CASE(update_test) {
     {
         // Update fetch config
         ss::sstring client_id = "franz-go";
-        f.sqm.local().record_fetch_tp(client_id, 8194, now).get();
+        f.sqm.local().record_fetch_tp("test", client_id, 8194, now).get();
         f.sqm.local()
-          .record_produce_tp_and_throttle(client_id, 8192, now)
+          .record_produce_tp_and_throttle("test", client_id, 8192, now)
           .get();
 
         // Increment the franz-go and not-franz-go group fetch quotas
@@ -260,7 +272,8 @@ SEASTAR_THREAD_TEST_CASE(update_test) {
         // Check produce is the same bucket
         BOOST_REQUIRE(it->second->tp_produce_rate.has_value());
         auto delay = f.sqm.local()
-                       .record_produce_tp_and_throttle(client_id, 1, now)
+                       .record_produce_tp_and_throttle(
+                         "test", client_id, 1, now)
                        .get();
         BOOST_CHECK_EQUAL(delay / 1ms, 1000);
     }
@@ -268,9 +281,9 @@ SEASTAR_THREAD_TEST_CASE(update_test) {
     {
         // Remove produce config
         ss::sstring client_id = "franz-go";
-        f.sqm.local().record_fetch_tp(client_id, 8196, now).get();
+        f.sqm.local().record_fetch_tp("test", client_id, 8196, now).get();
         f.sqm.local()
-          .record_produce_tp_and_throttle(client_id, 8192, now)
+          .record_produce_tp_and_throttle("test", client_id, 8192, now)
           .get();
 
         auto franz_go_values = f.quota_store.local().get_quota(franz_go_key);
@@ -290,12 +303,13 @@ SEASTAR_THREAD_TEST_CASE(update_test) {
 
         // Check fetch is the same bucket
         BOOST_REQUIRE(it->second->tp_fetch_rate.has_value());
-        auto delay = f.sqm.local().throttle_fetch_tp(client_id, now).get();
+        auto delay
+          = f.sqm.local().throttle_fetch_tp("test", client_id, now).get();
         BOOST_CHECK_EQUAL(delay / 1ms, 1000);
 
         // Check the new produce rate now applies
         f.sqm.local()
-          .record_produce_tp_and_throttle(client_id, 8192, now)
+          .record_produce_tp_and_throttle("test", client_id, 8192, now)
           .get();
         auto client_it = buckets_map->find(k_client_id{client_id});
         BOOST_REQUIRE(client_it != buckets_map->end());
